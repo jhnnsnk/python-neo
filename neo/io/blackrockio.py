@@ -1619,6 +1619,9 @@ class BlackrockIO(BaseIO):
             # Determine position where analog data starts
             fileoffset = self.__file_nsx_header_end_pos[nsx_i]
 
+            # Handle offset between nsx signals indicated in nsx header
+            nsx_offset = 0
+
             # From version 2.2+, there is a header block to consider
             if float(self.parameters_nsx[nsx_i]['Version']) > 2.1:
                 try:
@@ -1632,6 +1635,7 @@ class BlackrockIO(BaseIO):
                     #TODO: temp2[0] is the time stamp of the first sample -> should be recognized!!!
                     if temp1[0] != 1 or temp2[1] != (self.__num_packets_nsx[nsx_i] + 1):
                         raise Exception('blackrockio cannot handle files with gaps (available in version 2.2+).')
+                    nsx_offset=temp2[0]
 
                     # For 2.3 files, check that only one header block follows (i.e., no gaps)
                     # or, even better, deal with having more than one block of LFP data!
@@ -1650,7 +1654,7 @@ class BlackrockIO(BaseIO):
             for (seg_i, n_start_i, n_stop_i) in zip(range(len(n_starts)), n_starts, n_stops):
                 # Start and end packet to read
                 if n_start_i != None:
-                    start_packet = int(((n_start_i / self.nsx_unit[nsx_i]).simplified).base)
+                    start_packet = int(((n_start_i / self.nsx_unit[nsx_i]).rescale('dimensionless')).magnitude) -nsx_offset
                     if start_packet < 0:
                         start_packet = 0
                     if start_packet > self.__num_packets_nsx[nsx_i]:
@@ -1660,7 +1664,7 @@ class BlackrockIO(BaseIO):
 
                 if n_stop_i != None:
                     end_packet = int(((n_stop_i /
-                        self.nsx_unit[nsx_i]).simplified).base)
+                        self.nsx_unit[nsx_i]).rescale('dimensionless')).magnitude) -nsx_offset
                     if end_packet < 0:
                         end_packet = 0
                     if end_packet > self.__num_packets_nsx[nsx_i]:
@@ -1710,7 +1714,7 @@ class BlackrockIO(BaseIO):
                         # Alternative:
                         # sampling_rate=pq.CompoundUnit(str(
                         # self.analog_res[nsx_i]) + ' * Hz'),
-                        t_start=start_packet * self.nsx_unit[nsx_i],
+                        t_start=(start_packet+nsx_offset) * self.nsx_unit[nsx_i],
                         name="Analog Signal Segment " + str(seg_i) +
                         ", Channel " + str(channel_i) + ", NSX " + str(nsx_i),
                         file_origin=self.associated_fileset,
