@@ -303,6 +303,52 @@ class BaseAnalogSignal(BaseNeo, pq.Quantity):
         '''
         return self.t_start + np.arange(self.shape[0]) / self.sampling_rate
 
+
+    def time_slice(self, t_start, t_stop, duplicate = False):
+        '''
+        Creates a new :class:`AnalogSignal` corresponding to the time
+        slice of the original :class:`AnalogSignal` from times
+        :attr:`t_start` to :attr:`t_stop` (excluding
+        :attr:`t_stop`). Either parameter can also be None to use the
+        extents of the original signal as endpoints.  Returns a view
+        on the existing AnalogSignal, unless :attr:`duplicate` is set
+        to True, in chich case a copy of the data is returned.
+        '''
+
+        # determine array index of t_start
+        if t_start == None:
+            idx_start = 0
+        else:
+            idx_start = int((t_start-self.times[0]).rescale(self.times.units))
+            if idx_start < 0:
+                raise ValueError('t_start before begining of AnalogSignal')
+            if idx_start >= len(self.times):
+                raise ValueError('t_start at or beyond end of AnalogSignal')
+
+        # determine array index of t_stop
+        if t_stop == None:
+            idx_stop = len(self.times)
+        else:
+            idx_stop = int((t_stop-self.times[0]).rescale(self.times.units))
+            if idx_stop <= 0:
+                raise ValueError('t_stop at or before begining of AnalogSignal')
+            if idx_stop > len(self.times):
+                raise ValueError('t_stop beyond end of AnalogSignal')
+
+        # check consitency
+        if idx_stop <= idx_start:
+            raise ValueError('t_stop at or before t_start')
+
+        if duplicate:
+            # create new AnalogSignal object
+            ansig = self.duplicate_with_new_array(self[idx_start:idx_stop])
+        else:
+            # create view of AnalogSignal object
+            ansig = self[idx_start:idx_stop]
+
+        return ansig
+
+
     def rescale(self, units):
         '''
         Return a copy of the AnalogSignal(Array) converted to the specified
