@@ -759,7 +759,7 @@ class BlackrockIO(BaseIO):
 
         # List of sampling resolution of different nsX files
         self.analog_res = 10 * [0]
-
+        self.nsx_offset = 10 * [None]
         # List which .nsX files are available, X=0..9
         self.nsx_avail = []
 
@@ -1619,7 +1619,7 @@ class BlackrockIO(BaseIO):
             # Determine position where analog data starts
             fileoffset = self.__file_nsx_header_end_pos[nsx_i]
 
-            # Handle offset between nsx signals indicated in nsx header
+            # Default offset between nsx signals if not different indicated in nsx header
             nsx_offset = 0
 
             # From version 2.2+, there is a header block to consider
@@ -1635,7 +1635,8 @@ class BlackrockIO(BaseIO):
                     #TODO: temp2[0] is the time stamp of the first sample -> should be recognized!!!
                     if temp1[0] != 1 or temp2[1] != (self.__num_packets_nsx[nsx_i] + 1):
                         raise Exception('blackrockio cannot handle files with gaps (available in version 2.2+).')
-                    nsx_offset=temp2[0]
+                    self.nsx_offset[nsx_i]=temp2[0]
+                    nsx_offset = self.nsx_offset[nsx_i]
 
                     # For 2.3 files, check that only one header block follows (i.e., no gaps)
                     # or, even better, deal with having more than one block of LFP data!
