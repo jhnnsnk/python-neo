@@ -312,7 +312,7 @@ class BaseAnalogSignal(BaseNeo, pq.Quantity):
         :attr:`t_stop`). Either parameter can also be None to use the
         extents of the original signal as endpoints.  Returns a view
         on the existing AnalogSignal, unless :attr:`duplicate` is set
-        to True, in chich case a copy of the data is returned.
+        to True, in which case a copy of the data is returned.
         '''
 
         # determine array index of t_start
