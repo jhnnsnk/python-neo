@@ -51,7 +51,7 @@ def _get_sampling_rate(sampling_rate, sampling_period):
 
 
 def _new_BaseAnalogSignal(cls, signal, units=None, dtype=None, copy=True,
-                          t_start=0*pq.s, sampling_rate=None,
+                          t_start=0 * pq.s, sampling_rate=None,
                           sampling_period=None, name=None, file_origin=None,
                           description=None, channel_index=None,
                           annotations=None):
@@ -304,7 +304,7 @@ class BaseAnalogSignal(BaseNeo, pq.Quantity):
         return self.t_start + np.arange(self.shape[0]) / self.sampling_rate
 
 
-    def time_slice(self, t_start, t_stop, duplicate = False):
+    def time_slice(self, t_start, t_stop, duplicate=False):
         '''
         Creates a new :class:`AnalogSignal` corresponding to the time
         slice of the original :class:`AnalogSignal` from times
@@ -316,23 +316,26 @@ class BaseAnalogSignal(BaseNeo, pq.Quantity):
         '''
 
         # determine array index of t_start
-        if t_start == None:
+        if t_start is None:
             idx_start = 0
         else:
-            idx_start = int((t_start-self.times[0]).rescale(self.times.units))
+            idx_start = int((t_start - self.t_start).rescale(
+                self.sampling_period.units))
             if idx_start < 0:
-                raise ValueError('t_start before begining of AnalogSignal')
-            if idx_start >= len(self.times):
+                raise ValueError('t_start before beginning of AnalogSignal')
+            if idx_start >= len(self.data):
                 raise ValueError('t_start at or beyond end of AnalogSignal')
 
         # determine array index of t_stop
-        if t_stop == None:
-            idx_stop = len(self.times)
+        if t_stop is None:
+            idx_stop = len(self.data)
         else:
-            idx_stop = int((t_stop-self.times[0]).rescale(self.times.units))
+            idx_stop = int((t_stop - self.t_start).rescale(
+                self.sampling_period.units))
             if idx_stop <= 0:
-                raise ValueError('t_stop at or before begining of AnalogSignal')
-            if idx_stop > len(self.times):
+                raise ValueError(
+                    't_stop at or before beginning of AnalogSignal')
+            if idx_stop > len(self.data):
                 raise ValueError('t_stop beyond end of AnalogSignal')
 
         # check consitency
@@ -379,7 +382,7 @@ class BaseAnalogSignal(BaseNeo, pq.Quantity):
         Create a new :class:`BaseAnalogSignal` with the same metadata
         but different data
         '''
-        #signal is the new signal
+        # signal is the new signal
         new = self.__class__(signal=signal, units=self.units,
                              sampling_rate=self.sampling_rate)
         new._copy_data_complement(self)
@@ -586,7 +589,7 @@ class AnalogSignal(BaseAnalogSignal):
     '''
 
     def __new__(cls, signal, units=None, dtype=None, copy=True,
-                t_start=0*pq.s, sampling_rate=None, sampling_period=None,
+                t_start=0 * pq.s, sampling_rate=None, sampling_period=None,
                 name=None, file_origin=None, description=None,
                 channel_index=None, **annotations):
         '''
