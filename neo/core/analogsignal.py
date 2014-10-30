@@ -75,8 +75,8 @@ class BaseAnalogSignal(BaseNeo, pq.Quantity):
     _single_parent_objects = ('Segment', 'RecordingChannel')
     _quantity_attr = 'signal'
     _necessary_attrs = (('signal', pq.Quantity, 1),
-                       ('sampling_rate', pq.Quantity, 0),
-                       ('t_start', pq.Quantity, 0))
+                        ('sampling_rate', pq.Quantity, 0),
+                        ('t_start', pq.Quantity, 0))
     _recommended_attrs = ((('channel_index', int),) +
                           BaseNeo._recommended_attrs)
 
@@ -303,7 +303,6 @@ class BaseAnalogSignal(BaseNeo, pq.Quantity):
         '''
         return self.t_start + np.arange(self.shape[0]) / self.sampling_rate
 
-
     def time_slice(self, t_start, t_stop, duplicate=False):
         '''
         Creates a new :class:`AnalogSignal` corresponding to the time
@@ -350,7 +349,6 @@ class BaseAnalogSignal(BaseNeo, pq.Quantity):
             ansig = self[idx_start:idx_stop]
 
         return ansig
-
 
     def rescale(self, units):
         '''
