@@ -318,8 +318,8 @@ class BaseAnalogSignal(BaseNeo, pq.Quantity):
         if t_start is None:
             idx_start = 0
         else:
-            idx_start = int((t_start - self.t_start).rescale(
-                self.sampling_period.units))
+            idx_start = int(((t_start - self.t_start).rescale(
+                self.sampling_period.units) / self.sampling_period).magnitude)
             if idx_start < 0:
                 raise ValueError('t_start before beginning of AnalogSignal')
             if idx_start >= len(self.data):
@@ -329,15 +329,16 @@ class BaseAnalogSignal(BaseNeo, pq.Quantity):
         if t_stop is None:
             idx_stop = len(self.data)
         else:
-            idx_stop = int((t_stop - self.t_start).rescale(
-                self.sampling_period.units))
+            idx_stop = int(((t_stop - self.t_start).rescale(
+                self.sampling_period.units) / self.sampling_period).magnitude)
             if idx_stop <= 0:
                 raise ValueError(
                     't_stop at or before beginning of AnalogSignal')
             if idx_stop > len(self.data):
                 raise ValueError('t_stop beyond end of AnalogSignal')
 
-        # check consitency
+
+        # check consistency
         if idx_stop <= idx_start:
             raise ValueError('t_stop at or before t_start')
 
