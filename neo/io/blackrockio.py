@@ -1257,17 +1257,17 @@ class BlackrockIO(BaseIO):
         #===============================================================================
 
         # For lazy users that specify x,x instead of [x],[x] for n_starts,n_stops
-        if n_starts == None:
+        if n_starts is None:
             n_starts = [None]
-        elif type(n_starts) == pq.Quantity:
+        elif type(n_starts) is pq.Quantity:
             n_starts = [n_starts]
-        elif type(n_starts) != list or any([(type(i) != pq.Quantity and i != None) for i in n_starts]):
+        elif type(n_starts) != list or any([(type(i) != pq.Quantity and i is not None) for i in n_starts]):
             raise ValueError('Invalid specification of n_starts.')
-        if n_stops == None:
+        if n_stops is None:
             n_stops = [None]
-        elif type(n_stops) == pq.Quantity:
+        elif type(n_stops) is pq.Quantity:
             n_stops = [n_stops]
-        elif type(n_stops) != list or any([(type(i) != pq.Quantity and i != None) for i in n_stops]):
+        elif type(n_stops) != list or any([(type(i) != pq.Quantity and i is not None) for i in n_stops]):
             raise ValueError('Invalid specification of n_stops.')
 
 
@@ -1276,7 +1276,7 @@ class BlackrockIO(BaseIO):
             nsx = self.nsx_avail
 
         # If no nsx is specified, convert to an empty list (no nsx files)
-        if nsx == None:
+        if nsx is None:
             nsx = []
 
         # Also permit lazy specification for list of nsx
@@ -1295,7 +1295,7 @@ class BlackrockIO(BaseIO):
             channel_list = list(np.unique(channel_list))
 
         # If no channels are specified, then transform to an empty list
-        if channel_list == None:
+        if channel_list is None:
             channel_list = []
 
         if type(channel_list) != list:
@@ -1308,7 +1308,7 @@ class BlackrockIO(BaseIO):
                 not found (.ns" + str(nsx_i) + ").")
 
         # Make sure the requested .nev exists
-        if (units != None or events) and not self.nev_avail:
+        if (units is not None or events) and not self.nev_avail:
             raise IOError("Requested spiking data and/or events \
             not found (.nev).")
 
@@ -1316,7 +1316,7 @@ class BlackrockIO(BaseIO):
         complete_unit_ids = set([])
 
         # Find IDs of all units if complete spike data is requested
-        if units == None:
+        if units is None:
             # Select no units
             units = {}
             for channel_i in channel_list:
@@ -1391,20 +1391,20 @@ class BlackrockIO(BaseIO):
         seg = {}
         for (seg_i, n_start_i, n_stop_i) in zip(range(len(n_starts)), n_starts, n_stops):
             # Make sure start time < end time
-            if n_start_i != None and n_stop_i != None and n_start_i >= n_stop_i:
+            if n_start_i is not None and n_stop_i is not None and n_start_i >= n_stop_i:
                 raise ValueError("An n_starts value is larger than the corresponding n_stops value.")
 
             # If this segments starts at the beginning or lasts until the end,
             # try to find out the total length of recording as good as possible
             # (last event or last sample in analog signal)
             # Also determine start and end packets in nev time stamps
-            if n_start_i == None:
+            if n_start_i is None:
                 tstart.append(pq.Quantity(0, self.nev_unit, dtype=int))
                 start_packet = 0
             else:
                 tstart.append(n_start_i)
                 start_packet = int(((n_start_i / self.nev_unit).simplified).base)
-            if n_stop_i == None:
+            if n_stop_i is None:
                 tstop.append(self.get_max_time())
                 end_packet = max(self._event_timestamps) + 1  # add 1 to get last sample as well (not inclusive)
             else:
@@ -1635,7 +1635,7 @@ class BlackrockIO(BaseIO):
                     #TODO: temp2[0] is the time stamp of the first sample -> should be recognized!!!
                     if temp1[0] != 1 or temp2[1] != (self.__num_packets_nsx[nsx_i] + 1):
                         raise Exception('blackrockio cannot handle files with gaps (available in version 2.2+).')
-                    self.nsx_offset[nsx_i]=temp2[0]
+                    self.nsx_offset[nsx_i] = temp2[0]
                     nsx_offset = self.nsx_offset[nsx_i]
 
                     # For 2.3 files, check that only one header block follows (i.e., no gaps)
@@ -1654,8 +1654,8 @@ class BlackrockIO(BaseIO):
             # Go through all time periods
             for (seg_i, n_start_i, n_stop_i) in zip(range(len(n_starts)), n_starts, n_stops):
                 # Start and end packet to read
-                if n_start_i != None:
-                    start_packet = int(((n_start_i / self.nsx_unit[nsx_i]).rescale('dimensionless')).magnitude) -nsx_offset
+                if n_start_i is not None:
+                    start_packet = int(((n_start_i / self.nsx_unit[nsx_i]).rescale('dimensionless')).magnitude) - nsx_offset
                     if start_packet < 0:
                         start_packet = 0
                     if start_packet > self.__num_packets_nsx[nsx_i]:
@@ -1663,9 +1663,9 @@ class BlackrockIO(BaseIO):
                 else:
                     start_packet = 0
 
-                if n_stop_i != None:
+                if n_stop_i is not None:
                     end_packet = int(((n_stop_i /
-                        self.nsx_unit[nsx_i]).rescale('dimensionless')).magnitude) -nsx_offset
+                        self.nsx_unit[nsx_i]).rescale('dimensionless')).magnitude) - nsx_offset
                     if end_packet < 0:
                         end_packet = 0
                     if end_packet > self.__num_packets_nsx[nsx_i]:
@@ -1715,7 +1715,7 @@ class BlackrockIO(BaseIO):
                         # Alternative:
                         # sampling_rate=pq.CompoundUnit(str(
                         # self.analog_res[nsx_i]) + ' * Hz'),
-                        t_start=(start_packet+nsx_offset) * self.nsx_unit[nsx_i],
+                        t_start=(start_packet + nsx_offset) * self.nsx_unit[nsx_i],
                         name="Analog Signal Segment " + str(seg_i) +
                         ", Channel " + str(channel_i) + ", NSX " + str(nsx_i),
                         file_origin=self.associated_fileset,
