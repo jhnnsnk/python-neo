@@ -1544,7 +1544,7 @@ class BlackrockIO(BaseIO):
                                         dtype='int',
                                         t_start=tstart[seg_i],
                                         t_stop=tstop[seg_i],
-                                        sampling_rate=self.nev_unit,
+                                        sampling_rate=1. / self.nev_unit,
                                         name="Segment " + str(seg_i) + ", Channel " + str(channel_i) + ", Unit " + str(unit_i),
                                         file_origin=self.associated_fileset,
                                         unit_id=unit_i,
