@@ -207,51 +207,122 @@ class GdfIO(BaseIO):
 #         seg.create_many_to_one_relationship()
 #         return seg
 
-    def __read_spiketrains(self, data, id_list, time_unit, t_start, t_stop):
+    def __read_spiketrains(
+            self, data, gdf_id_list, time_unit, t_start, t_stop):
+        '''Reads a list of spike trains with specified IDs from the GDF data.
+
+        Parameters
+        ----------
+        data : numpy.array
+            A Nx2 array containing the integer GDF data. The first column
+            contains the neuron ID (or more general, event ID), the second
+            column is the time stamp.
+        gdf_id_list : list
+            For each integer ID in this list the corresponding spike train
+            (event train) is extracted from the data and returned. If None is
+            specified, all spiketrains are returned. Default: None.
+        time_unit : Quantity (time)
+            The time unit of recorded time stamps.
+        t_start : Quantity (time)
+            Start time of the recorded GDF.
+        t_stop : Quantity (time)
+            Stop time of the recorded GDF.
+
+        Returns
+        -------
+        spiketrain_list : list of SpikeTrain
+            For each ID in gdf_id_list, one spike train is returned in this
+            list. Duplicate entries in gdf_id_list result in duplicate
+            SpikeTrain objects. Each SpikeTrain has an annotation id
+            corresponding to its GDF ID.
+        '''
         # list of spike trains
-        sptrains = []
-        for i in id_list:
+        spiketrain_list = []
+
+        for i in gdf_id_list:
             # find the spike times for each neuron id
             train = data[np.where(data[:, 0] == i), 1][0]
             # create neo spike train
-            sptrains.append(SpikeTrain(train * time_unit,
-                                       t_start=t_start,
-                                       t_stop=t_stop,
-                                       annotations={'neuron id': i}))
-        return sptrains
+            spiketrain_list.append(SpikeTrain(
+                train * time_unit, t_start=t_start, t_stop=t_stop,
+                annotations={'id': i}))
 
-    def read_segment(self,
-                     lazy=False, cascade=True, id_list=None,
-                     time_unit=pq.ms, t_start=None, t_stop=None):
-        """
-        Read a segment of data.
-        """
+        return spiketrain_list
+
+    def read_segment(
+            self, lazy=False, cascade=True, gdf_id_list=None,
+            time_unit=pq.ms, t_start=None, t_stop=None):
+        '''Reads a segment containing of spike trains with specified IDs
+        from the GDF data.
+
+        Parameters
+        ----------
+        lazy : bool
+        cascade : bool
+        gdf_id_list : list
+            For each integer ID in this list the corresponding spike train
+            (event train) is extracted from the data and returned. If None is
+            specified, all spiketrains are returned. Default: None.
+        time_unit : Quantity (time)
+            The time unit of recorded time stamps.
+        t_start : Quantity (time)
+            Start time of the recorded GDF.
+        t_stop : Quantity (time)
+            Stop time of the recorded GDF.
+
+        Returns
+        -------
+        seg : Segment
+            For each ID in gdf_id_list, one SpikeTrain is returned as part of
+            the Segment. Duplicate entries in gdf_id_list result in duplicate
+            SpikeTrain objects. Each SpikeTrain has an annotation id
+            corresponding to its GDF ID.
+        '''
         # load .gdf data
         data = np.loadtxt(self.filename)
 
-        # get neuron id_list
-        if id_list is None:
-            id_list = np.unique(data[:, 0]).astype(int)
+        # get neuron gdf_id_list
+        if gdf_id_list is None:
+            gdf_id_list = np.unique(data[:, 0]).astype(int)
 
-        # list of spike trains
+        # create segment
         seg = Segment()
         seg.spiketrains = self.__read_spiketrains(
-            data, id_list, time_unit, t_start, t_stop)
-        # seg.create_relation_ships()
+            data, gdf_id_list, time_unit, t_start, t_stop)
+        seg.create_relationships()
 
         return seg
 
-    def read_spiketrain(self,
-                        lazy=False, cascade=True, id=None,
-                        time_unit=pq.ms, t_start=0 * pq.ms, t_stop=None):
-        """
-        With this IO SpikeTrain can e acces directly with its channel number
-        """
+    def read_spiketrain(
+            self, lazy=False, cascade=True, gdf_id=None,
+            time_unit=pq.ms, t_start=0 * pq.ms, t_stop=None):
+        '''Reads SpikeTrain with specified ID from the GDF data.
+
+        Parameters
+        ----------
+        lazy : bool
+        cascade : bool
+        gdf_id : int
+            The GDF ID of the returned SpikeTrain.
+        time_unit : Quantity (time)
+            The time unit of recorded time stamps.
+        t_start : Quantity (time)
+            Start time of the recorded GDF.
+        t_stop : Quantity (time)
+            Stop time of the recorded GDF.
+
+        Returns
+        -------
+        spiketrain : SpikeTrain
+            The requested SpikeTrain object with an annotation 'id"
+            corrsponding to the gdf_id parameter.
+        '''
         # load .gdf data
         data = np.loadtxt(self.filename)
 
-        if id is None:
-            raise ValueError('No ID specified. You IDiot.')
+        if gdf_id is None:
+            raise ValueError('No gdf_id specified.')
 
         # list of spike trains
-        return self.__read_spiketrains(data, [id], time_unit, t_start, t_stop)[0]
+        return self.__read_spiketrains(
+            data, [gdf_id], time_unit, t_start, t_stop)[0]
