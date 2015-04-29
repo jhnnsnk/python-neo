@@ -81,6 +81,7 @@ from neo.io.brainwaresrcio import BrainwareSrcIO
 from neo.io.elanio import ElanIO
 from neo.io.elphyio import ElphyIO
 from neo.io.exampleio import ExampleIO
+from neo.io.gdfio import GdfIO
 from neo.io.klustakwikio import KlustaKwikIO
 from neo.io.micromedio import MicromedIO
 from neo.io.hdf5io import NeoHdf5IO
