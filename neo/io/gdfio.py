@@ -218,12 +218,13 @@ class GdfIO(BaseIO):
                                        t_start=t_start,
                                        t_stop=t_stop,
                                        annotations={'neuron id': i}))
+        return sptrains
 
     def read_segment(self,
                      lazy=False, cascade=True, id_list=None,
                      time_unit=pq.ms, t_start=None, t_stop=None):
         """
-        With this IO SpikeTrain can e acces directly with its channel number
+        Read a segment of data.
         """
         # load .gdf data
         data = np.loadtxt(self.filename)
