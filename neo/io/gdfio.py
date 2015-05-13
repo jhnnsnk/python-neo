@@ -207,8 +207,9 @@ class GdfIO(BaseIO):
 #         seg.create_many_to_one_relationship()
 #         return seg
 
-    def __read_spiketrains(
-            self, data, gdf_id_list, time_unit, t_start, t_stop):
+    def __read_spiketrains(self, data, gdf_id_list, time_unit,
+                           t_start, t_stop, id_column=0,
+                           time_column=1):
         '''Reads a list of spike trains with specified IDs from the GDF data.
 
         Parameters
@@ -227,6 +228,10 @@ class GdfIO(BaseIO):
             Start time of the recorded GDF.
         t_stop : Quantity (time)
             Stop time of the recorded GDF.
+        id_column : int
+            Column index of neuron IDs
+        time_column : int
+            Column index of time stamps
 
         Returns
         -------
@@ -238,20 +243,61 @@ class GdfIO(BaseIO):
         '''
         # list of spike trains
         spiketrain_list = []
+        
+        if len(data.shape) < 2 and id_column is not None:
+            raise ValueError('File does not contain neuron IDs but '
+                             'id_column specified to '+str(id_column)+'.')
+
+        if time_column is None:
+            raise ValueError('No spike times in file.')
+
+        if None in gdf_id_list and id_column is not None:
+            raise ValueError('No neuron IDs specified but file contains '
+                             'neuron IDs in column '+str(id_column)+'.'
+                             ' Specify empty list to ' 'retrieve'
+                             ' spiketrains of all neurons.')
+
+        if gdf_id_list != [None] and id_column is None:
+            raise ValueError('Specified neuron IDs to '
+                             'be '+str(gdf_id_list)+','
+                             ' but file does not contain neuron IDs.')
+
+        if t_stop is None:
+            raise ValueError('No t_stop specified.')
+
+        # assert that no single column is assigned twice
+        if id_column == time_column and None not in [id_column,
+                                                     time_column]:
+            raise ValueError('1 or more columns have been specified to '
+                             'contain the same data.')
+
+        # get neuron gdf_id_list
+        if gdf_id_list is []:
+            gdf_id_list = np.unique(data[:, id_column]).astype(int)
+
+
+
+        # assert that there are spike times in the file
+        if time_column is None:
+            raise ValueError('Time column is None. No spike times to \
+be read in.')
 
         for i in gdf_id_list:
             # find the spike times for each neuron id
-            train = data[np.where(data[:, 0] == i), 1][0]
+            if id_column is not None:
+                train = data[np.where(data[:, id_column] == i), time_column][0]
+            else:
+                train = data[time_column]
             # create neo spike train
             spiketrain_list.append(SpikeTrain(
-                train * time_unit, t_start=t_start, t_stop=t_stop,
+                train, units=time_unit, t_start=t_start, t_stop=t_stop,
                 annotations={'id': i}))
 
         return spiketrain_list
 
-    def read_segment(
-            self, lazy=False, cascade=True, gdf_id_list=None,
-            time_unit=pq.ms, t_start=None, t_stop=None):
+    def read_segment(self, lazy=False, cascade=True,
+                     gdf_id_list=None, time_unit=pq.ms, t_start=0.*pq.ms,
+                     t_stop=None, id_column=0, time_column=1):
         '''Reads a segment containing of spike trains with specified IDs
         from the GDF data.
 
@@ -269,6 +315,10 @@ class GdfIO(BaseIO):
             Start time of the recorded GDF.
         t_stop : Quantity (time)
             Stop time of the recorded GDF.
+        id_column : int
+            Column index of neuron IDs
+        time_column : int
+            Column index of time stamps
 
         Returns
         -------
@@ -279,23 +329,30 @@ class GdfIO(BaseIO):
             corresponding to its GDF ID.
         '''
         # load .gdf data
-        data = np.loadtxt(self.filename)
+        try:
+            data = np.loadtxt(self.filename, dtype=np.int32)
+        except ValueError:
+            data = np.loadtxt(self.filename, dtype=np.float)
 
-        # get neuron gdf_id_list
         if gdf_id_list is None:
-            gdf_id_list = np.unique(data[:, 0]).astype(int)
+            gdf_id_list = [None]
 
         # create segment
         seg = Segment()
-        seg.spiketrains = self.__read_spiketrains(
-            data, gdf_id_list, time_unit, t_start, t_stop)
-        seg.create_relationships()
+        seg.spiketrains = self.__read_spiketrains(data, gdf_id_list,
+                                                  time_unit, t_start,
+                                                  t_stop,
+                                                  id_column=id_column,
+                                                  time_column=time_column)
+#        seg.create_relationships()
 
         return seg
 
     def read_spiketrain(
             self, lazy=False, cascade=True, gdf_id=None,
-            time_unit=pq.ms, t_start=0 * pq.ms, t_stop=None):
+            time_unit=pq.ms, t_start=0 * pq.ms, t_stop=None,
+            id_column=0, time_column=1):
+
         '''Reads SpikeTrain with specified ID from the GDF data.
 
         Parameters
@@ -310,6 +367,10 @@ class GdfIO(BaseIO):
             Start time of the recorded GDF.
         t_stop : Quantity (time)
             Stop time of the recorded GDF.
+        id_column : int
+            Column index of neuron IDs
+        time_column : int
+            Column index of time stamps
 
         Returns
         -------
@@ -318,11 +379,13 @@ class GdfIO(BaseIO):
             corrsponding to the gdf_id parameter.
         '''
         # load .gdf data
-        data = np.loadtxt(self.filename)
-
-        if gdf_id is None:
-            raise ValueError('No gdf_id specified.')
+        try:
+            data = np.loadtxt(self.filename, dtype=np.int32)
+        except ValueError:
+            data = np.loadtxt(self.filename, dtype=np.float)
 
         # list of spike trains
-        return self.__read_spiketrains(
-            data, [gdf_id], time_unit, t_start, t_stop)[0]
+        return self.__read_spiketrains(data, [gdf_id], time_unit,
+                                       t_start, t_stop,
+                                       id_column=id_column,
+                                       time_column=time_column)[0]
