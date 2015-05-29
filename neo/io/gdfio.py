@@ -123,91 +123,9 @@ class GdfIO(BaseIO):
         BaseIO.__init__(self)
         self.filename = filename
 
-# Segment reading is supported so I define this :
-#     def read_segment(self,
-# the 2 first keyword arguments are imposed by neo.io API
-#                      lazy=False,
-#                      cascade=True,
-# all following arguments are decied by this IO and are
-# free
-#                      segment_duration=15.,
-#                      num_analogsignal=4,
-#                      num_spiketrain_by_channel=3,
-#                      ):
-#         """
-#         Return a fake Segment.
-#
-#         The self.filename does not matter.
-#
-#         In this IO read by default a Segment.
-#
-#         This is just a example to be adapted to each ClassIO.
-#         In this case these 3 paramters are  taken in account because this function
-#         return a generated segment with fake AnalogSignal and fake SpikeTrain.
-#
-#         Parameters:
-#             segment_duration :is the size in secend of the segment.
-#             num_analogsignal : number of AnalogSignal in this segment
-#             num_spiketrain : number of SpikeTrain in this segment
-#
-#         """
-#
-# sampling_rate = 10000.  # Hz
-#         t_start = -1.
-#
-# time vector for generated signal
-#         timevect = np.arange(
-#             t_start, t_start + segment_duration, 1. / sampling_rate)
-#
-# create an empty segment
-#         seg = Segment(name='it is a seg from exampleio')
-#
-#         if cascade:
-# read nested analosignal
-#             for i in range(num_analogsignal):
-#                 ana = self.read_analogsignal(lazy=lazy, cascade=cascade,
-#                                              channel_index=i, segment_duration=segment_duration, t_start=t_start)
-#                 seg.analogsignals += [ana]
-#
-# read nested spiketrain
-#             for i in range(num_analogsignal):
-#                 for _ in range(num_spiketrain_by_channel):
-#                     sptr = self.read_spiketrain(lazy=lazy, cascade=cascade,
-#                                                 segment_duration=segment_duration, t_start=t_start, channel_index=i)
-#                     seg.spiketrains += [sptr]
-#
-# create an EventArray that mimic triggers.
-# note that ExampleIO  do not allow to acess directly to EventArray
-# for that you need read_segment(cascade = True)
-#             eva = EventArray()
-#             if lazy:
-# in lazy case no data are readed
-# eva is empty
-#                 pass
-#             else:
-# otherwise it really contain data
-#                 n = 1000
-#
-# neo.io support quantities my vector use second for unit
-#                 eva.times = timevect[
-#                     (np.random.rand(n) * timevect.size).astype('i')] * pq.s
-# all duration are the same
-#                 eva.durations = np.ones(n) * 500 * pq.ms
-# label
-#                 l = []
-#                 for i in range(n):
-#                     if np.random.rand() > .6:
-#                         l.append('TriggerA')
-#                     else:
-#                         l.append('TriggerB')
-#                 eva.labels = np.array(l)
-#
-#             seg.eventarrays += [eva]
-#
-#         seg.create_many_to_one_relationship()
-#         return seg
 
-    def __read_spiketrains(self, data, gdf_id_list, time_unit,
+
+    def __read_spiketrains(self, gdf_id_list, time_unit,
                            t_start, t_stop, id_column=0,
                            time_column=1):
         '''Reads a list of spike trains with specified IDs from the GDF data.
@@ -241,9 +159,20 @@ class GdfIO(BaseIO):
             SpikeTrain objects. Each SpikeTrain has an annotation id
             corresponding to its GDF ID.
         '''
+
+        # load .gdf data
+        #check data type of spike times to read
+        f = open(self.filename)
+        line = f.readline()
+        if '.' not in line: #assuming only spike times can be floats
+            data = np.loadtxt(self.filename, dtype=np.int32)
+        else:
+            data = np.loadtxt(self.filename, dtype=np.float)
+
+
         # list of spike trains
         spiketrain_list = []
-        
+
         if len(data.shape) < 2 and id_column is not None:
             raise ValueError('File does not contain neuron IDs but '
                              'id_column specified to '+str(id_column)+'.')
@@ -265,6 +194,12 @@ class GdfIO(BaseIO):
         if t_stop is None:
             raise ValueError('No t_stop specified.')
 
+        if not isinstance(t_stop,pq.quantity.Quantity):
+            raise TypeError('t_stop (%s) is not a quantity.'%(t_stop))
+
+        if not isinstance(t_start,pq.quantity.Quantity):
+            raise TypeError('t_start (%s) is not a quantity.'%(t_start))
+
         # assert that no single column is assigned twice
         if id_column == time_column and None not in [id_column,
                                                      time_column]:
@@ -272,22 +207,29 @@ class GdfIO(BaseIO):
                              'contain the same data.')
 
         # get neuron gdf_id_list
-        if gdf_id_list is []:
+        if gdf_id_list == []:
             gdf_id_list = np.unique(data[:, id_column]).astype(int)
 
-
+        # get consistent dimensions of data
+        if len(data.shape)<2:
+            data = data.reshape((-1,1))
 
         # assert that there are spike times in the file
         if time_column is None:
             raise ValueError('Time column is None. No spike times to \
 be read in.')
 
+        # using only time point between t_start and t_stop
+        data = data[np.where(np.logical_and(
+                    data[:,time_column]>=t_start.rescale(time_unit).magnitude,
+                    data[:,time_column]<t_stop.rescale(time_unit).magnitude))]
+
         for i in gdf_id_list:
             # find the spike times for each neuron id
             if id_column is not None:
-                train = data[np.where(data[:, id_column] == i), time_column][0]
+                train = data[np.where(data[:, id_column] == i)][:,time_column]
             else:
-                train = data[time_column]
+                train = data[:,time_column]
             # create neo spike train
             spiketrain_list.append(SpikeTrain(
                 train, units=time_unit, t_start=t_start, t_stop=t_stop,
@@ -328,18 +270,12 @@ be read in.')
             SpikeTrain objects. Each SpikeTrain has an annotation id
             corresponding to its GDF ID.
         '''
-        # load .gdf data
-        try:
-            data = np.loadtxt(self.filename, dtype=np.int32)
-        except ValueError:
-            data = np.loadtxt(self.filename, dtype=np.float)
-
         if gdf_id_list is None:
             gdf_id_list = [None]
 
         # create segment
         seg = Segment()
-        seg.spiketrains = self.__read_spiketrains(data, gdf_id_list,
+        seg.spiketrains = self.__read_spiketrains(gdf_id_list,
                                                   time_unit, t_start,
                                                   t_stop,
                                                   id_column=id_column,
@@ -378,14 +314,9 @@ be read in.')
             The requested SpikeTrain object with an annotation 'id"
             corrsponding to the gdf_id parameter.
         '''
-        # load .gdf data
-        try:
-            data = np.loadtxt(self.filename, dtype=np.int32)
-        except ValueError:
-            data = np.loadtxt(self.filename, dtype=np.float)
 
         # list of spike trains
-        return self.__read_spiketrains(data, [gdf_id], time_unit,
+        return self.__read_spiketrains([gdf_id], time_unit,
                                        t_start, t_stop,
                                        id_column=id_column,
                                        time_column=time_column)[0]
