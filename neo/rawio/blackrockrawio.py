@@ -7,7 +7,7 @@ This work is based on:
   * Michael Denker, Lyuba Zehl - second version
   * Samuel Garcia - third version
   * Lyuba Zehl, Michael Denker - fourth version
-  * Samuel Garcia - fifth version
+  * Samuel Garcia, Julia Srenger - fifth version
 
 This IO supports reading only.
 This IO is able to read:
@@ -212,10 +212,14 @@ class BlackrockRawIO(BaseRawIO):
             '2.1': self.__get_channel_labels_variant_a,
             '2.2': self.__get_channel_labels_variant_b,
             '2.3': self.__get_channel_labels_variant_b}
-        self.__nonneural_evtypes = {
-            '2.1': self.__get_nonneural_evtypes_variant_a,
-            '2.2': self.__get_nonneural_evtypes_variant_a,
-            '2.3': self.__get_nonneural_evtypes_variant_b}
+        self.__nonneural_evdicts = {
+            '2.1': self.__get_nonneural_evdicts_variant_a,
+            '2.2': self.__get_nonneural_evdicts_variant_a,
+            '2.3': self.__get_nonneural_evdicts_variant_b}
+        self.__comment_evdict = {
+            '2.1': self.__get_comment_evdict_variant_a,
+            '2.2': self.__get_comment_evdict_variant_a,
+            '2.3': self.__get_comment_evdict_variant_a}
 
     def _parse_header(self):
 
@@ -264,10 +268,17 @@ class BlackrockRawIO(BaseRawIO):
                                           wf_offset, wf_left_sweep, wf_sampling_rate))
 
             # scan events
+            # NonNeural: serial and digital input
             events_data, event_segment_ids = self.nev_data['NonNeural']
-            ev_dict = self.__nonneural_evtypes[self.__nev_spec](events_data)
+            ev_dict = self.__nonneural_evdicts[self.__nev_spec](events_data)
+            if 'Comments' in self.nev_data:
+                comments_data, comments_segment_ids = self.nev_data['Comments']
+                ev_dict.update(self.__comment_evdict[self.__nev_spec](comments_data))
             for ev_name in ev_dict:
                 event_channels.append((ev_name, '', 'event'))
+            # TODO: TrackingEvents
+            # TODO: ButtonTrigger
+            # TODO: VideoSync
 
         # Step2 NSX file
         # Load file spec and headers of available nsx files
@@ -286,12 +297,33 @@ class BlackrockRawIO(BaseRawIO):
             # for nsxdef get_analogsignal_shape(self, block_index, seg_index):
             self.__nsx_data_header[nsx_nb] = self.__nsx_dataheader_reader[spec](nsx_nb)
 
-        # We can load only one for one class instance
-        if self.nsx_to_load is None and len(self._avail_nsx) > 0:
-            self.nsx_to_load = max(self._avail_nsx)
+        # nsx_to_load can be either int, list, 'max', all' (aka None)
+        # here make a list only
+        if self.nsx_to_load is None or self.nsx_to_load == 'all':
+            self.nsx_to_load = list(self._avail_nsx)
+        elif self.nsx_to_load == 'max':
+            if len(self._avail_nsx):
+                self.nsx_to_load = [max(self._avail_nsx)]
+            else:
+                self.nsx_to_load = []
+        elif isinstance(self.nsx_to_load, int):
+            self.nsx_to_load = [self.nsx_to_load]
+        elif isinstance(self.nsx_to_load, list):
+            pass
+        else:
+            raise(ValueError('nsx_to_load is wrong'))
 
-        if self.nsx_to_load is not None and \
-                self.__nsx_spec[self.nsx_to_load] == '2.1' and \
+        assert all(nsx_nb in self._avail_nsx for nsx_nb in self.nsx_to_load),\
+                                    'nsx_to_load do not match available nsx list'
+
+        # check that all files come from the same specification
+        all_spec = [self.__nsx_spec[nsx_nb] for nsx in self.nsx_to_load]
+        if self._avail_files['nev']:
+            all_spec.append(self.__nev_spec)
+        assert all(all_spec[0] == spec for spec in all_spec), "Files don't have the same internal version"
+
+        if len(self.nsx_to_load) > 0 and \
+                self.__nsx_spec[self.nsx_to_load[0]] == '2.1' and \
                 not self._avail_files['nev']:
             pass
             # Because rescaling to volts requires information from nev file (dig_factor)
@@ -301,69 +333,84 @@ class BlackrockRawIO(BaseRawIO):
         # This requires nsX to be parsed already
         # Needs to be called when no nsX are available as well in order to warn the user
         if self._avail_files['nev']:
-            self.__match_nsx_and_nev_segment_ids(self.nsx_to_load)
+            for nsx_nb in self.nsx_to_load:
+                self.__match_nsx_and_nev_segment_ids(nsx_nb)
 
-        if self.nsx_to_load is not None:
-            spec = self.__nsx_spec[self.nsx_to_load]
-            self.nsx_data = self.__nsx_data_reader[spec](self.nsx_to_load)
+        # usefull to get local channel index in nsX from the global channel index
+        local_sig_indexes = []
 
-            self._nb_segment = len(self.nsx_data)
+        self.nsx_datas = {}
+        self.sig_sampling_rates = {}
+        if len(self.nsx_to_load) > 0:
+            for nsx_nb in self.nsx_to_load:
+                spec = self.__nsx_spec[nsx_nb]
+                self.nsx_datas[nsx_nb] = self.__nsx_data_reader[spec](nsx_nb)
 
-            sig_sampling_rate = float(
-                main_sampling_rate / self.__nsx_basic_header[self.nsx_to_load]['period'])
+                sr = float(main_sampling_rate / self.__nsx_basic_header[nsx_nb]['period'])
+                self.sig_sampling_rates[nsx_nb] = sr
 
-            if spec in ['2.2', '2.3']:
-                ext_header = self.__nsx_ext_header[self.nsx_to_load]
-            elif spec == '2.1':
-                ext_header = []
-                keys = ['labels', 'units', 'min_analog_val',
-                        'max_analog_val', 'min_digital_val', 'max_digital_val']
-                params = self.__nsx_params[spec](self.nsx_to_load)
-                for i in range(len(params['labels'])):
-                    d = {}
-                    for key in keys:
-                        d[key] = params[key][i]
-                    ext_header.append(d)
-
-            for i, chan in enumerate(ext_header):
                 if spec in ['2.2', '2.3']:
-                    ch_name = chan['electrode_label'].decode()
-                    ch_id = chan['electrode_id']
-                    units = chan['units'].decode()
+                    ext_header = self.__nsx_ext_header[nsx_nb]
                 elif spec == '2.1':
-                    ch_name = chan['labels']
-                    ch_id = self.__nsx_ext_header[self.nsx_to_load][i]['electrode_id']
-                    units = chan['units']
-                sig_dtype = 'int16'
-                # max_analog_val/min_analog_val/max_digital_val/min_analog_val are int16!!!!!
-                # dangarous situation so cast to float everyone
-                if np.isnan(float(chan['min_analog_val'])):
-                    gain = 1
-                    offset = 0
-                else:
-                    gain = (float(chan['max_analog_val']) - float(chan['min_analog_val'])) / \
-                           (float(chan['max_digital_val']) - float(chan['min_digital_val']))
-                    offset = -float(chan['min_digital_val']) \
-                             * gain + float(chan['min_analog_val'])
-                group_id = 0
-                sig_channels.append((ch_name, ch_id, sig_sampling_rate, sig_dtype,
-                                     units, gain, offset, group_id,))
+                    ext_header = []
+                    keys = ['labels', 'units', 'min_analog_val',
+                            'max_analog_val', 'min_digital_val', 'max_digital_val']
+                    params = self.__nsx_params[spec](nsx_nb)
+                    for i in range(len(params['labels'])):
+                        d = {}
+                        for key in keys:
+                            d[key] = params[key][i]
+                        ext_header.append(d)
+
+                for i, chan in enumerate(ext_header):
+                    if spec in ['2.2', '2.3']:
+                        ch_name = chan['electrode_label'].decode()
+                        ch_id = chan['electrode_id']
+                        units = chan['units'].decode()
+                    elif spec == '2.1':
+                        ch_name = chan['labels']
+                        ch_id = self.__nsx_ext_header[nsx_nb][i]['electrode_id']
+                        units = chan['units']
+                    sig_dtype = 'int16'
+                    # max_analog_val/min_analog_val/max_digital_val/min_analog_val are int16!!!!!
+                    # dangarous situation so cast to float everyone
+                    if np.isnan(float(chan['min_analog_val'])):
+                        gain = 1
+                        offset = 0
+                    else:
+                        gain = (float(chan['max_analog_val']) - float(chan['min_analog_val'])) / \
+                               (float(chan['max_digital_val']) - float(chan['min_digital_val']))
+                        offset = -float(chan['min_digital_val']) \
+                            * gain + float(chan['min_analog_val'])
+                    group_id = nsx_nb
+                    sig_channels.append((ch_name, ch_id, sr, sig_dtype,
+                                         units, gain, offset, group_id,))
+                local_sig_indexes.extend(range(len(ext_header)))
+
+            self._local_sig_indexes = np.array(local_sig_indexes)
+
+            # check nb segment per nsx
+            nb_segments_for_nsx = [len(self.nsx_datas[nsx_nb]) for nsx_nb in self.nsx_to_load]
+            assert all(nb == nb_segments_for_nsx[0] for nb in nb_segments_for_nsx),\
+                                                    'Segment nb not consistanent across nsX files'
+            self._nb_segment = nb_segments_for_nsx[0]
 
             self.__delete_empty_segments()
 
             # t_start/t_stop for segment are given by nsx limits or nev limits
-            self._sigs_t_starts = []
+            self._sigs_t_starts = {nsx_nb: [] for nsx_nb in self.nsx_to_load}
             self._seg_t_starts, self._seg_t_stops = [], []
             for data_bl in range(self._nb_segment):
-                length = self.nsx_data[data_bl].shape[0]
-                if self.__nsx_data_header[self.nsx_to_load] is None:
-                    t_start = 0.
-                else:
-                    t_start = self.__nsx_data_header[self.nsx_to_load][data_bl]['timestamp'] / \
-                        self.__nsx_basic_header[self.nsx_to_load]['timestamp_resolution']
-                self._sigs_t_starts.append(t_start)
-
-                t_stop = t_start + length / sig_sampling_rate
+                t_stop = 0.
+                for nsx_nb in self.nsx_to_load:
+                    length = self.nsx_datas[nsx_nb][data_bl].shape[0]
+                    if self.__nsx_data_header[nsx_nb] is None:
+                        t_start = 0.
+                    else:
+                        t_start = self.__nsx_data_header[nsx_nb][data_bl]['timestamp'] / \
+                            self.__nsx_basic_header[nsx_nb]['timestamp_resolution']
+                    t_stop = max(t_stop, t_start + length / self.sig_sampling_rates[nsx_nb])
+                    self._sigs_t_starts[nsx_nb].append(t_start)
 
                 if self._avail_files['nev']:
                     max_nev_time = 0
@@ -462,7 +509,7 @@ class BlackrockRawIO(BaseRawIO):
                     chidx_ann['connector_pinID'] = neuevwav['connector_pin'][get_idx]
                     chidx_ann['nev_dig_factor'] = neuevwav['digitization_factor'][get_idx]
                     chidx_ann['nev_energy_threshold'] = neuevwav['energy_threshold'][
-                                                            get_idx] * pq.uV
+                        get_idx] * pq.uV
                     chidx_ann['nev_hi_threshold'] = neuevwav['hi_threshold'][get_idx] * pq.uV
                     chidx_ann['nev_lo_threshold'] = neuevwav['lo_threshold'][get_idx] * pq.uV
                     chidx_ann['nb_sorted_units'] = neuevwav['nb_sorted_units'][get_idx]
@@ -475,16 +522,16 @@ class BlackrockRawIO(BaseRawIO):
                             sig_channels[c]['id'])
                         # filter type codes (extracted from blackrock manual)
                         chidx_ann['nev_hi_freq_corner'] = neuevflt['hi_freq_corner'][
-                                                              get_idx] / 1000. * pq.Hz
+                            get_idx] / 1000. * pq.Hz
                         chidx_ann['nev_hi_freq_order'] = neuevflt['hi_freq_order'][get_idx]
                         chidx_ann['nev_hi_freq_type'] = flt_type[neuevflt['hi_freq_type'][
                             get_idx]]
                         chidx_ann['nev_lo_freq_corner'] = neuevflt['lo_freq_corner'][
-                                                              get_idx] / 1000. * pq.Hz
+                            get_idx] / 1000. * pq.Hz
                         chidx_ann['nev_lo_freq_order'] = neuevflt['lo_freq_order'][get_idx]
                         chidx_ann['nev_lo_freq_type'] = flt_type[neuevflt['lo_freq_type'][
                             get_idx]]
-            if self.__nsx_spec[self.nsx_to_load] in ['2.2', '2.3'] and self.__nsx_ext_header:
+            if self.__nsx_spec[self.nsx_to_load[0]] in ['2.2', '2.3'] and self.__nsx_ext_header:
                 # It does not matter which nsX file to ask for this info
                 k = list(self.__nsx_ext_header.keys())[0]
                 if sig_channels[c]['id'] in self.__nsx_ext_header[k]['electrode_id']:
@@ -519,12 +566,13 @@ class BlackrockRawIO(BaseRawIO):
                 seg_ann['rec_datetime'] = rec_datetime
 
             for c in range(sig_channels.size):
+                nsx_nb = sig_channels['group_id'][c]
                 anasig_an = seg_ann['signals'][c]
                 desc = "AnalogSignal {} from channel_id: {}, label: {}, nsx: {}".format(
-                    c, sig_channels['id'][c], sig_channels['name'][c], self.nsx_to_load)
+                    c, sig_channels['id'][c], sig_channels['name'][c], nsx_nb)
                 anasig_an['description'] = desc
-                anasig_an['file_origin'] = self._filenames['nsx'] + '.ns' + str(self.nsx_to_load)
-                anasig_an['nsx'] = self.nsx_to_load
+                anasig_an['file_origin'] = self._filenames['nsx'] + '.ns' + str(nsx_nb)
+                anasig_an['nsx'] = nsx_nb
                 chidx_ann = self.raw_annotations['signal_channels'][c]
                 chidx_ann['description'] = 'Container for Units and AnalogSignals of ' \
                                            'one recording channel across segments.'
@@ -539,12 +587,19 @@ class BlackrockRawIO(BaseRawIO):
                 st_ann['file_origin'] = self._filenames['nev'] + '.nev'
 
             if self._avail_files['nev']:
-                ev_dict = self.__nonneural_evtypes[self.__nev_spec](events_data)
+                ev_dict = self.__nonneural_evdicts[self.__nev_spec](events_data)
+                if 'Comments' in self.nev_data:
+                    ev_dict.update(self.__comment_evdict[self.__nev_spec](comments_data))
+                    color_codes = ["#{:08X}".format(code) for code in comments_data['color']]
+                    color_codes = np.array(color_codes, dtype='S9')
                 for c in range(event_channels.size):
+                    # Next line makes ev_ann a reference to seg_ann['events'][c]
                     ev_ann = seg_ann['events'][c]
                     name = event_channels['name'][c]
                     ev_ann['description'] = ev_dict[name]['desc']
                     ev_ann['file_origin'] = self._filenames['nev'] + '.nev'
+                    if name == 'comments':
+                        ev_ann['color_codes'] = color_codes
 
     def _source_name(self):
         return self.filename
@@ -555,20 +610,33 @@ class BlackrockRawIO(BaseRawIO):
     def _segment_t_stop(self, block_index, seg_index):
         return self._seg_t_stops[seg_index]
 
+    def _get_nsx_and_local_indexes(self, channel_indexes):
+        # internal helper to get nsx number and local channel index
+        # from global channel indexes
+        # when this is called channell_indexes are alwas in the same group_id
+        # this is checked at BaseRaw level
+        if channel_indexes is None:
+            channel_indexes = slice(None)
+        nsx_nb = self.header['signal_channels'][channel_indexes]['group_id'][0]
+        if channel_indexes is None:
+            local_indexes = slice(None)
+        else:
+            local_indexes = self._local_sig_indexes[channel_indexes]
+        return nsx_nb, local_indexes
+
     def _get_signal_size(self, block_index, seg_index, channel_indexes):
-        memmap_data = self.nsx_data[seg_index]
+        nsx_nb, local_indexes = self._get_nsx_and_local_indexes(channel_indexes)
+        memmap_data = self.nsx_datas[nsx_nb][seg_index]
         return memmap_data.shape[0]
 
     def _get_signal_t_start(self, block_index, seg_index, channel_indexes):
-        return self._sigs_t_starts[seg_index]
+        nsx_nb, local_indexes = self._get_nsx_and_local_indexes(channel_indexes)
+        return self._sigs_t_starts[nsx_nb][seg_index]
 
     def _get_analogsignal_chunk(self, block_index, seg_index, i_start, i_stop, channel_indexes):
-        assert block_index == 0
-        memmap_data = self.nsx_data[seg_index]
-
-        if channel_indexes is None:
-            channel_indexes = slice(None)
-        sig_chunk = memmap_data[i_start:i_stop, channel_indexes]
+        nsx_nb, local_indexes = self._get_nsx_and_local_indexes(channel_indexes)
+        memmap_data = self.nsx_datas[nsx_nb][seg_index]
+        sig_chunk = memmap_data[i_start:i_stop, local_indexes]
         return sig_chunk
 
     def _spike_count(self, block_index, seg_index, unit_index):
@@ -653,8 +721,12 @@ class BlackrockRawIO(BaseRawIO):
 
     def _event_count(self, block_index, seg_index, event_channel_index):
         name = self.header['event_channels']['name'][event_channel_index]
-        events_data, event_segment_ids = self.nev_data['NonNeural']
-        ev_dict = self.__nonneural_evtypes[self.__nev_spec](events_data)[name]
+        if name == 'comments':
+            events_data, event_segment_ids = self.nev_data['Comments']
+            ev_dict = self.__comment_evdict[self.__nev_spec](events_data)[name]
+        else:
+            events_data, event_segment_ids = self.nev_data['NonNeural']
+            ev_dict = self.__nonneural_evdicts[self.__nev_spec](events_data)[name]
         mask = ev_dict['mask'] & (event_segment_ids == seg_index)
         if self._nb_segment == 1:
             # very fast
@@ -669,12 +741,26 @@ class BlackrockRawIO(BaseRawIO):
 
     def _get_event_timestamps(self, block_index, seg_index, event_channel_index, t_start, t_stop):
         name = self.header['event_channels']['name'][event_channel_index]
-        events_data, event_segment_ids = self.nev_data['NonNeural']
-        ev_dict = self.__nonneural_evtypes[self.__nev_spec](events_data)[name]
-        mask = ev_dict['mask'] & (event_segment_ids == seg_index)
+        if name == 'comments':
+            events_data, event_segment_ids = self.nev_data['Comments']
+            ev_dict = self.__comment_evdict[self.__nev_spec](events_data)[name]
+            # If immediate decoding is desired:
+            encoding = {0: 'latin_1', 1: 'utf_16', 255: 'latin_1'}
+            labels = [data[ev_dict['field']].decode(
+                encoding[data['char_set']]) for data in events_data]
+            # Only ASCII can be allowed due to using numpy
+            # labels.astype('S') forces to use bytes in BaseFromRaw 401, in read_segment
+            # This is not recommended
+            # TODO: Maybe switch to astype('U')
+            labels = np.array([data.encode('ASCII', errors='ignore') for data in labels])
+        else:
+            events_data, event_segment_ids = self.nev_data['NonNeural']
+            ev_dict = self.__nonneural_evdicts[self.__nev_spec](events_data)[name]
+            labels = events_data[ev_dict['field']]
 
+        mask = ev_dict['mask'] & (event_segment_ids == seg_index)
         timestamp = events_data[mask]['timestamp']
-        labels = events_data[mask][ev_dict['field']]
+        labels = labels[mask]
 
         # time clip
         sl = self._get_timestamp_slice(timestamp, seg_index, t_start, t_stop)
@@ -885,8 +971,8 @@ class BlackrockRawIO(BaseRawIO):
 
             # data size = number of data points * (2bytes * number of channels)
             # use of `int` avoids overflow problem
-            data_size = int(dh['nb_data_points']) * \
-                        int(self.__nsx_basic_header[nsx_nb]['channel_count']) * 2
+            data_size = int(dh['nb_data_points']) *\
+                int(self.__nsx_basic_header[nsx_nb]['channel_count']) * 2
             # define new offset (to possible next data block)
             offset = data_header[index]['offset_to_data_block'] + data_size
 
@@ -1082,8 +1168,8 @@ class BlackrockRawIO(BaseRawIO):
         Extract mask for reset comment events in 2.3 .nev file
         """
         restart_mask = np.logical_and(masks['Comments'][nev_data_masks['Comments']],
-                                      raw_event_data['value'] ==
-                                      b'\x00\x00\x00\x00\x00\x00critical load restart')
+                                      raw_event_data['value']
+                                      == b'\x00\x00\x00\x00\x00\x00critical load restart')
         # TODO: Fix hardcoded number of bytes
         return restart_mask
 
@@ -1104,7 +1190,7 @@ class BlackrockRawIO(BaseRawIO):
             # explicitely converting to int to allow for negative diff values
             jump_ids = \
                 np.where(np.diff(np.asarray(raw_event_data['timestamp'], dtype=int)) < 0)[0] + 1
-            overlap = np.isin(jump_ids, reset_ev_ids)
+            overlap = np.in1d(jump_ids, reset_ev_ids)
             if not all(overlap):
                 # additional resets occurred without a reset event being stored
                 additional_ids = jump_ids[np.invert(overlap)]
@@ -1136,7 +1222,7 @@ class BlackrockRawIO(BaseRawIO):
         if self.__nev_spec == '2.3':
             nsx_offset = self.__nsx_data_header[nsx_nb][0]['timestamp']
             # Multiples of 1/30.000s that pass between two nsX samples
-            nsx_period = self.__nsx_basic_header[self.nsx_to_load]['period']
+            nsx_period = self.__nsx_basic_header[nsx_nb]['period']
             # NSX segments needed as dict and list
             nonempty_nsx_segments = {}
             list_nonempty_nsx_segments = []
@@ -1162,15 +1248,16 @@ class BlackrockRawIO(BaseRawIO):
                     # Last timestamp in this nsX segment
                     # Not subtracting nsX offset from end because spike extraction might continue
                     end_of_current_nsx_seg = seg['timestamp'] + \
-                                seg['nb_data_points'] * self.__nsx_basic_header[nsx_nb]['period']
+                        seg['nb_data_points'] * self.__nsx_basic_header[nsx_nb]['period']
 
-                    mask_after_seg = [(ev_ids == i) & (data['timestamp'] >
-                                                       end_of_current_nsx_seg + nsx_period)]
+                    mask_after_seg = (ev_ids == i) & \
+                                    (data['timestamp'] > end_of_current_nsx_seg + nsx_period)
 
                     # Show warning if spikes do not fit any segment (+- 1 sampling 'tick')
                     # Spike should belong to segment before
-                    mask_outside = [(ev_ids == i) & (data['timestamp'] < int(seg['timestamp']) -
-                                                     nsx_offset - nsx_period)]
+                    mask_outside = (ev_ids == i) & \
+                            (data['timestamp'] < int(seg['timestamp']) - nsx_offset - nsx_period)
+
                     if len(data[mask_outside]) > 0:
                         warnings.warn("Spikes outside any segment. Detected on segment #{}".
                                       format(i))
@@ -1186,9 +1273,9 @@ class BlackrockRawIO(BaseRawIO):
                         # Warning if spikes are after last segment
                         if i == len(list_nonempty_nsx_segments) - 1:
                             timestamp_resolution = self.__nsx_params[self.__nsx_spec[
-                                self.nsx_to_load]]('timestamp_resolution', self.nsx_to_load)
-                            time_after_seg = (data[mask_after_seg]['timestamp'][-1] -
-                                              end_of_current_nsx_seg) / timestamp_resolution
+                                nsx_nb]]('timestamp_resolution', nsx_nb)
+                            time_after_seg = (data[mask_after_seg]['timestamp'][-1]
+                                              - end_of_current_nsx_seg) / timestamp_resolution
                             warnings.warn("Spikes {}s after last segment.".format(time_after_seg))
                             # Break out of loop because it's the last iteration
                             # and the spikes should stay connected to last segment
@@ -1197,7 +1284,7 @@ class BlackrockRawIO(BaseRawIO):
                         # If reset and no segment detected in nev, then these segments cannot be
                         # distinguished in nev, which is a big problem
                         # XXX 96 is an arbitrary number based on observations in available files
-                        elif list_nonempty_nsx_segments[i+1]['timestamp'] - nsx_offset <= 96:
+                        elif list_nonempty_nsx_segments[i + 1]['timestamp'] - nsx_offset <= 96:
                             # If not all definitely belong to the next segment,
                             # then it cannot be distinguished where some belong
                             if len(data[ev_ids == i]) != len(data[mask_after_seg]):
@@ -1211,7 +1298,7 @@ class BlackrockRawIO(BaseRawIO):
             # consistency check: same number of segments for nsx and nev data
             assert nb_possible_nev_segments == len(nonempty_nsx_segments), \
                 ('Inconsistent ns{0} and nev file. {1} segments present in .nev file, but {2} in '
-                 'ns{0} file.'.format(self.nsx_to_load, nb_possible_nev_segments,
+                 'ns{0} file.'.format(nsx_nb, nb_possible_nev_segments,
                                       len(nonempty_nsx_segments)))
 
             new_nev_segment_id_mapping = dict(zip(range(nb_possible_nev_segments),
@@ -1444,7 +1531,7 @@ class BlackrockRawIO(BaseRawIO):
                     ('packet_id', 'uint16'),
                     ('char_set', 'uint8'),
                     ('flag', 'uint8'),
-                    ('data', 'uint32'),
+                    ('color', 'uint32'),
                     ('comment', 'S{0}'.format(data_size - 12))]},
             'VideoSync': {
                 'a': [
@@ -1696,8 +1783,8 @@ class BlackrockRawIO(BaseRawIO):
         filename = '.'.join([self._filenames['nsx'], 'ns%i' % nsx_nb])
 
         bytes_in_headers = self.__nsx_basic_header[nsx_nb].dtype.itemsize + \
-                           self.__nsx_ext_header[nsx_nb].dtype.itemsize * \
-                           self.__nsx_basic_header[nsx_nb]['channel_count']
+            self.__nsx_ext_header[nsx_nb].dtype.itemsize * \
+            self.__nsx_basic_header[nsx_nb]['channel_count']
 
         if np.isnan(dig_factor[0]):
             units = ''
@@ -1707,22 +1794,18 @@ class BlackrockRawIO(BaseRawIO):
 
         nsx_parameters = {
             'nb_data_points': int(
-                (self.__get_file_size(filename) - bytes_in_headers) /
-                (2 * self.__nsx_basic_header[nsx_nb]['channel_count']) - 1),
+                (self.__get_file_size(filename) - bytes_in_headers)
+                / (2 * self.__nsx_basic_header[nsx_nb]['channel_count']) - 1),
             'labels': labels,
-            'units': np.array(
-                [units] *
-                self.__nsx_basic_header[nsx_nb]['channel_count']),
+            'units': np.array([units] * self.__nsx_basic_header[nsx_nb]['channel_count']),
             'min_analog_val': -1 * np.array(dig_factor),
             'max_analog_val': np.array(dig_factor),
             'min_digital_val': np.array(
                 [-1000] * self.__nsx_basic_header[nsx_nb]['channel_count']),
-            'max_digital_val': np.array(
-                [1000] * self.__nsx_basic_header[nsx_nb]['channel_count']),
+            'max_digital_val': np.array([1000] * self.__nsx_basic_header[nsx_nb]['channel_count']),
             'timestamp_resolution': 30000,
             'bytes_in_headers': bytes_in_headers,
-            'sampling_rate':
-                30000 / self.__nsx_basic_header[nsx_nb]['period'] * pq.Hz,
+            'sampling_rate': 30000 / self.__nsx_basic_header[nsx_nb]['period'] * pq.Hz,
             'time_unit': pq.CompoundUnit("1.0/{0}*s".format(
                 30000 / self.__nsx_basic_header[nsx_nb]['period']))}
 
@@ -1752,15 +1835,15 @@ class BlackrockRawIO(BaseRawIO):
             'bytes_in_headers':
                 self.__nsx_basic_header[nsx_nb]['bytes_in_headers'],
             'sampling_rate':
-                self.__nsx_basic_header[nsx_nb]['timestamp_resolution'] /
-                self.__nsx_basic_header[nsx_nb]['period'] * pq.Hz,
+                self.__nsx_basic_header[nsx_nb]['timestamp_resolution']
+                / self.__nsx_basic_header[nsx_nb]['period'] * pq.Hz,
             'time_unit': pq.CompoundUnit("1.0/{0}*s".format(
-                self.__nsx_basic_header[nsx_nb]['timestamp_resolution'] /
-                self.__nsx_basic_header[nsx_nb]['period']))}
+                self.__nsx_basic_header[nsx_nb]['timestamp_resolution']
+                / self.__nsx_basic_header[nsx_nb]['period']))}
 
         return nsx_parameters[param_name]
 
-    def __get_nonneural_evtypes_variant_a(self, data):
+    def __get_nonneural_evdicts_variant_a(self, data):
         """
         Defines event types and the necessary parameters to extract them from
         a 2.1 and 2.2 nev file.
@@ -1772,14 +1855,15 @@ class BlackrockRawIO(BaseRawIO):
             'digital_input_port': {
                 'name': 'digital_input_port',
                 'field': 'digital_input',
-                'mask': self.__is_set(data['packet_insertion_reason'], 0),
+                'mask': self.__is_set(data['packet_insertion_reason'], 0)
+                        & ~self.__is_set(data['packet_insertion_reason'], 7),
                 'desc': "Events of the digital input port"},
             'serial_input_port': {
                 'name': 'serial_input_port',
                 'field': 'digital_input',
                 'mask':
-                    self.__is_set(data['packet_insertion_reason'], 0) &
-                    self.__is_set(data['packet_insertion_reason'], 7),
+                    self.__is_set(data['packet_insertion_reason'], 0)
+                    & self.__is_set(data['packet_insertion_reason'], 7),
                 'desc': "Events of the serial input port"}}
 
         # analog input events via threshold crossings
@@ -1812,63 +1896,73 @@ class BlackrockRawIO(BaseRawIO):
         segment in the nsX data.
         """
 
-        nb_empty_segments = 0
+        # Discard empty segments
+        removed_seg = []
         for data_bl in range(self._nb_segment):
-            length = self.nsx_data[data_bl].shape[0]
-            # Discard empty segments
-            if length < 2:
-                nb_empty_segments += 1
-                self.nsx_data.pop(data_bl)
-                self.__nsx_data_header[self.nsx_to_load].pop(data_bl)
-                continue
+            keep_seg = True
+            for nsx_nb in self.nsx_to_load:
+                length = self.nsx_datas[nsx_nb][data_bl].shape[0]
+                keep_seg = keep_seg and (length >= 2)
+
+            if not keep_seg:
+                removed_seg.append(data_bl)
+                for nsx_nb in self.nsx_to_load:
+                    self.nsx_datas[nsx_nb].pop(data_bl)
+                    self.__nsx_data_header[nsx_nb].pop(data_bl)
 
         # Keys need to be increasing from 0 to maximum in steps of 1
-        # To ensure this after removing empty segments, some keys need to be changed
-        for i in range(self._nb_segment):
-            # If this key does not exist, reduce all following keys by 1,
-            # so the keys become a range starting from 0
-            if i not in self.nsx_data:
-                self.nsx_data = {key - 1 if key > i else key: value for (key, value) in
-                                 self.nsx_data.items()}
-                data_header = self.__nsx_data_header[self.nsx_to_load]
-                data_header = {key - 1 if key > i else key: value for (key, value) in
-                               data_header.items()}
-                self.__nsx_data_header[self.nsx_to_load] = data_header
+        # To ensure this after removing empty segments, some keys need to be re mapped
+        for i in removed_seg[::-1]:
+            for j in range(i + 1, self._nb_segment):
+                # remap nsx seg index
+                for nsx_nb in self.nsx_to_load:
+                    data = self.nsx_datas[nsx_nb].pop(j)
+                    self.nsx_datas[nsx_nb][j-1] = data
+
+                    data_header = self.__nsx_data_header[nsx_nb].pop(j)
+                    self.__nsx_data_header[nsx_nb][j - 1] = data_header
+
                 # Also remap nev data, ev_ids are the equivalent to keys above
                 if self._avail_files['nev']:
                     for k, (data, ev_ids) in self.nev_data.items():
-                        # If this segment id does not exist, reduce all following by 1
-                        # to make them a range starting from 0
-                        if i not in ev_ids:
-                            ev_ids[ev_ids > i] -= 1
-                        else:
-                            raise ValueError("A segment in nsX was omitted but there were"
-                                             "spikes matched to it.")
+                        ev_ids[ev_ids == j] -= 1
 
-        # Empty segments were discarded, thus there may be less segments now
-        self._nb_segment -= nb_empty_segments
+            self._nb_segment -= 1
 
-    def __get_nonneural_evtypes_variant_b(self, data):
+    def __get_nonneural_evdicts_variant_b(self, data):
         """
         Defines event types and the necessary parameters to extract them from
         a 2.3 nev file.
         """
         # digital events
+        if not np.all(np.in1d(data['packet_insertion_reason'], [1, 129])):
+            # Blackrock spec gives reason==64 means PERIODIC, but never seen this live
+            warnings.warn("Unknown event codes found", RuntimeWarning)
         event_types = {
             'digital_input_port': {
                 'name': 'digital_input_port',
                 'field': 'digital_input',
-                'mask': self.__is_set(data['packet_insertion_reason'], 0),
+                'mask': self.__is_set(data['packet_insertion_reason'], 0)
+                        & ~self.__is_set(data['packet_insertion_reason'], 7),
                 'desc': "Events of the digital input port"},
             'serial_input_port': {
                 'name': 'serial_input_port',
                 'field': 'digital_input',
-                'mask':
-                    self.__is_set(data['packet_insertion_reason'], 0) &
-                    self.__is_set(data['packet_insertion_reason'], 7),
+                'mask': self.__is_set(data['packet_insertion_reason'], 0)
+                        & self.__is_set(data['packet_insertion_reason'], 7),
                 'desc': "Events of the serial input port"}}
 
         return event_types
+
+    def __get_comment_evdict_variant_a(self, data):
+        return {
+            'comments': {
+                'name': 'comments',
+                'field': 'comment',
+                'mask': data['packet_id'] == 65535,
+                'desc': 'Comments'
+            }
+        }
 
     def __is_set(self, flag, pos):
         """

@@ -35,6 +35,12 @@ try:
 except ImportError:
     HAVE_NIX = False
 
+try:
+    from unittest import mock
+    SKIPMOCK = False
+except ImportError:
+    SKIPMOCK = True
+
 
 @unittest.skipUnless(HAVE_NIX, "Requires NIX")
 class NixIOTest(unittest.TestCase):
@@ -309,8 +315,7 @@ class NixIOTest(unittest.TestCase):
 
     @classmethod
     def create_full_nix_file(cls, filename):
-        nixfile = nix.File.open(filename, nix.FileMode.Overwrite,
-                                backend="h5py")
+        nixfile = nix.File.open(filename, nix.FileMode.Overwrite)
 
         nix_block_a = nixfile.create_block(cls.rword(10), "neo.block")
         nix_block_a.definition = cls.rsentence(5, 10)
@@ -345,7 +350,7 @@ class NixIOTest(unittest.TestCase):
         allsignalgroups = list()
 
         # analogsignals
-        for n in range(3):
+        for n in range(5):
             siggroup = list()
             asig_name = "{}_asig{}".format(cls.rword(10), n)
             asig_definition = cls.rsentence(5, 5)
@@ -416,7 +421,7 @@ class NixIOTest(unittest.TestCase):
                 mtag_st.name, mtag_st.name + ".metadata"
             )
             mtag_st.metadata = mtag_st_md
-            mtag_st_md.create_property("t_stop", nix.Value(times[-1] + 1.0))
+            mtag_st_md.create_property("t_stop", times[-1] + 1.0)
 
             waveforms = cls.rquant((10, 8, 5), 1)
             wfname = "{}.waveforms".format(mtag_st.name)
@@ -433,7 +438,7 @@ class NixIOTest(unittest.TestCase):
                 wfname, "neo.waveforms.metadata"
             )
             wfda.metadata.create_property("left_sweep",
-                                          [nix.Value(20)] * 5)
+                                          [20] * 5)
             allspiketrains.append(mtag_st)
 
         # Epochs
@@ -510,9 +515,9 @@ class NixIOTest(unittest.TestCase):
             nixrc.metadata = nixchx.metadata.create_section(
                 nixrc.name, "neo.channelindex.metadata"
             )
-            nixrc.metadata.create_property("index", nix.Value(chan))
-            nixrc.metadata.create_property("channel_id", nix.Value(chan + 1))
-            dims = tuple(map(nix.Value, cls.rquant(3, 3)))
+            nixrc.metadata.create_property("index", chan)
+            nixrc.metadata.create_property("channel_id", chan + 1)
+            dims = cls.rquant(3, 1)
             coordprop = nixrc.metadata.create_property("coordinates", dims)
             coordprop.unit = "pm"
 
@@ -637,17 +642,15 @@ class NixIOWriteTest(NixIOTest):
         self.filename = os.path.join(self.tempdir, "testnixio.nix")
         self.writer = NixIO(self.filename, "ow")
         self.io = self.writer
-        self.reader = nix.File.open(self.filename,
-                                    nix.FileMode.ReadOnly,
-                                    backend="h5py")
+        self.reader = nix.File.open(self.filename, nix.FileMode.ReadOnly)
 
     def tearDown(self):
         self.writer.close()
         self.reader.close()
         shutil.rmtree(self.tempdir)
 
-    def write_and_compare(self, blocks):
-        self.writer.write_all_blocks(blocks)
+    def write_and_compare(self, blocks, use_obj_names=False):
+        self.writer.write_all_blocks(blocks, use_obj_names)
         self.compare_blocks(blocks, self.reader.blocks)
         self.compare_blocks(self.writer.read_all_blocks(), self.reader.blocks)
         self.compare_blocks(blocks, self.reader.blocks)
@@ -890,8 +893,7 @@ class NixIOWriteTest(NixIOTest):
                                                       t_stop=times[-1] + pq.s,
                                                       units=pq.s))
             for chidx in range(nchx):
-                chx = ChannelIndex(name="chx{}".format(chidx),
-                                   index=[1, 2],
+                chx = ChannelIndex(index=[1, 2],
                                    channel_ids=[11, 22])
                 blk.channel_indexes.append(chx)
                 for unidx in range(nunits):
@@ -899,6 +901,172 @@ class NixIOWriteTest(NixIOTest):
                     chx.units.append(unit)
         self.writer.write_all_blocks(blocks)
         self.compare_blocks(blocks, self.reader.blocks)
+
+        with self.assertRaises(ValueError):
+            self.writer.write_all_blocks(blocks, use_obj_names=True)
+
+    def test_name_objects_write(self):
+        nblocks = 2
+        nsegs = 2
+        nanasig = 4
+        nirrseg = 2
+        nepochs = 3
+        nevents = 4
+        nspiketrains = 3
+        nchx = 5
+        nunits = 10
+
+        times = self.rquant(1, pq.s)
+        signal = self.rquant(1, pq.V)
+        blocks = []
+        for blkidx in range(nblocks):
+            blk = Block(name="block{}".format(blkidx))
+            blocks.append(blk)
+            for segidx in range(nsegs):
+                seg = Segment(name="seg{}".format(segidx))
+                blk.segments.append(seg)
+                for anaidx in range(nanasig):
+                    asig = AnalogSignal(
+                        name="{}:as{}".format(seg.name, anaidx),
+                        signal=signal, sampling_rate=pq.Hz
+                    )
+                    seg.analogsignals.append(asig)
+                for irridx in range(nirrseg):
+                    isig = IrregularlySampledSignal(
+                        name="{}:is{}".format(seg.name, irridx),
+                        times=times,
+                        signal=signal,
+                        time_units=pq.s
+                    )
+                    seg.irregularlysampledsignals.append(isig)
+                for epidx in range(nepochs):
+                    seg.epochs.append(
+                        Epoch(name="{}:ep{}".format(seg.name, epidx),
+                              times=times, durations=times)
+                    )
+                for evidx in range(nevents):
+                    seg.events.append(
+                        Event(name="{}:ev{}".format(seg.name, evidx),
+                              times=times)
+                    )
+                for stidx in range(nspiketrains):
+                    seg.spiketrains.append(
+                        SpikeTrain(name="{}:st{}".format(seg.name, stidx),
+                                   times=times,
+                                   t_stop=times[-1] + pq.s,
+                                   units=pq.s)
+                    )
+            for chidx in range(nchx):
+                chx = ChannelIndex(name="chx{}".format(chidx),
+                                   index=[1, 2],
+                                   channel_ids=[11, 22])
+                blk.channel_indexes.append(chx)
+                for unidx in range(nunits):
+                    unit = Unit(name="unit{}".format(unidx))
+                    chx.units.append(unit)
+
+        # put guard on _generate_nix_name
+        if not SKIPMOCK:
+            nixgenmock = mock.Mock(name="_generate_nix_name",
+                                   wraps=self.io._generate_nix_name)
+            self.io._generate_nix_name = nixgenmock
+
+        self.writer.write_block(blocks[0], use_obj_names=True)
+        self.compare_blocks([blocks[0]], self.reader.blocks)
+        self.compare_blocks(self.writer.read_all_blocks(), self.reader.blocks)
+        self.compare_blocks(blocks, self.reader.blocks)
+        if not SKIPMOCK:
+            nixgenmock.assert_not_called()
+
+        self.write_and_compare(blocks, use_obj_names=True)
+        if not SKIPMOCK:
+            nixgenmock.assert_not_called()
+
+        self.assertEqual(self.reader.blocks[0].name, "block0")
+
+        blocks[0].name = blocks[1].name  # name conflict
+        with self.assertRaises(ValueError):
+            self.writer.write_all_blocks(blocks, use_obj_names=True)
+        blocks[0].name = "new name"
+        self.assertEqual(blocks[0].segments[1].spiketrains[1].name, "seg1:st1")
+        st0 = blocks[0].segments[0].spiketrains[0].name
+        blocks[0].segments[0].spiketrains[1].name = st0  # name conflict
+        with self.assertRaises(ValueError):
+            self.writer.write_all_blocks(blocks, use_obj_names=True)
+        with self.assertRaises(ValueError):
+            self.writer.write_block(blocks[0], use_obj_names=True)
+        if not SKIPMOCK:
+            nixgenmock.assert_not_called()
+
+    def test_name_conflicts(self):
+        # anon block
+        blk = Block()
+        with self.assertRaises(ValueError):
+            self.io.write_block(blk, use_obj_names=True)
+
+        # two anon blocks
+        blocks = [Block(), Block()]
+        with self.assertRaises(ValueError):
+            self.io.write_all_blocks(blocks, use_obj_names=True)
+
+        # same name blocks
+        blocks = [Block(name="one"), Block(name="one")]
+        with self.assertRaises(ValueError):
+            self.io.write_all_blocks(blocks, use_obj_names=True)
+
+        # one block, two same name segments
+        blk = Block("new")
+        seg = Segment("I am the segment", a="a annoation")
+        blk.segments.append(seg)
+        seg = Segment("I am the segment", a="b annotation")
+        blk.segments.append(seg)
+        with self.assertRaises(ValueError):
+            self.io.write_block(blk, use_obj_names=True)
+
+        times = self.rquant(1, pq.s)
+        signal = self.rquant(1, pq.V)
+        # name conflict: analog + irregular signals
+        seg.analogsignals.append(
+            AnalogSignal(name="signal", signal=signal, sampling_rate=pq.Hz)
+        )
+        seg.irregularlysampledsignals.append(
+            IrregularlySampledSignal(name="signal", signal=signal, times=times)
+        )
+        blk = Block(name="Signal conflict Block")
+        blk.segments.append(seg)
+        with self.assertRaises(ValueError):
+            self.io.write_block(blk, use_obj_names=True)
+
+        # name conflict: event + spiketrain
+        blk = Block(name="Event+SpikeTrain conflict Block")
+        seg = Segment(name="Event+SpikeTrain conflict Segment")
+        blk.segments.append(seg)
+        seg.events.append(Event(name="TimeyStuff", times=times))
+        seg.spiketrains.append(SpikeTrain(name="TimeyStuff", times=times,
+                                          t_stop=pq.s))
+        with self.assertRaises(ValueError):
+            self.io.write_block(blk, use_obj_names=True)
+
+        # make spiketrain anon
+        blk.segments[0].spiketrains[0].name = None
+        with self.assertRaises(ValueError):
+            self.io.write_block(blk, use_obj_names=True)
+
+        # name conflict in channel indexes
+        blk = Block(name="ChannelIndex conflict Block")
+        blk.channel_indexes.append(ChannelIndex(name="chax", index=[1]))
+        blk.channel_indexes.append(ChannelIndex(name="chax", index=[2]))
+        with self.assertRaises(ValueError):
+            self.io.write_block(blk, use_obj_names=True)
+
+        # name conflict in units
+        blk = Block(name="unitconf")
+        chx = ChannelIndex(name="ok", index=[100])
+        blk.channel_indexes.append(chx)
+        chx.units.append(Unit(name="IHAVEATWIN"))
+        chx.units.append(Unit(name="IHAVEATWIN"))
+        with self.assertRaises(ValueError):
+            self.io.write_block(blk, use_obj_names=True)
 
     def test_multiref_write(self):
         blk = Block("blk1")
@@ -961,16 +1129,86 @@ class NixIOWriteTest(NixIOTest):
         chidx.units.append(unit)
         unit.spiketrains.extend([sta, stb])
         self.writer.write_block(blk)
+        self.writer.close()
 
         self.compare_blocks([blk], self.reader.blocks)
 
-        self.writer.close()
         reader = NixIO(self.filename, "ro")
         blk = reader.read_block(neoname="segmentless block")
         chx = blk.channel_indexes[0]
         self.assertEqual(len(chx.analogsignals), 1)
         self.assertEqual(len(chx.irregularlysampledsignals), 1)
         self.assertEqual(len(chx.units[0].spiketrains), 2)
+
+    def test_rewrite_refs(self):
+
+        def checksignalcounts(fname):
+            with NixIO(fname, "ro") as r:
+                blk = r.read_block()
+            chidx = blk.channel_indexes[0]
+            seg = blk.segments[0]
+            self.assertEqual(len(chidx.analogsignals), 2)
+            self.assertEqual(len(chidx.units[0].spiketrains), 3)
+            self.assertEqual(len(seg.analogsignals), 1)
+            self.assertEqual(len(seg.spiketrains), 1)
+
+        blk = Block()
+        # ChannelIndex
+        chidx = ChannelIndex(index=[1])
+        blk.channel_indexes.append(chidx)
+
+        # Two signals on ChannelIndex
+        for idx in range(2):
+            asigchx = AnalogSignal(signal=[idx], units="mV",
+                                   sampling_rate=pq.Hz)
+            chidx.analogsignals.append(asigchx)
+
+        # Unit
+        unit = Unit()
+        chidx.units.append(unit)
+
+        # Three SpikeTrains on Unit
+        for idx in range(3):
+            st = SpikeTrain([idx], units="ms", t_stop=40)
+            unit.spiketrains.append(st)
+
+        # Segment
+        seg = Segment()
+        blk.segments.append(seg)
+
+        # One signal on Segment
+        asigseg = AnalogSignal(signal=[2], units="uA",
+                               sampling_rate=pq.Hz)
+        seg.analogsignals.append(asigseg)
+
+        # One spiketrain on Segment
+        stseg = SpikeTrain([10], units="ms", t_stop=40)
+        seg.spiketrains.append(stseg)
+
+        # Write, compare, and check counts
+        self.writer.write_block(blk)
+        self.compare_blocks([blk], self.reader.blocks)
+        self.assertEqual(len(chidx.analogsignals), 2)
+        self.assertEqual(len(seg.analogsignals), 1)
+        self.assertEqual(len(chidx.analogsignals), 2)
+        self.assertEqual(len(chidx.units[0].spiketrains), 3)
+        self.assertEqual(len(seg.analogsignals), 1)
+        self.assertEqual(len(seg.spiketrains), 1)
+
+        # Check counts with separate reader
+        checksignalcounts(self.filename)
+
+        # Write again and check counts
+        secondwrite = os.path.join(self.tempdir, "testnixio-2.nix")
+        with NixIO(secondwrite, "ow") as w:
+            w.write_block(blk)
+
+        self.compare_blocks([blk], self.reader.blocks)
+
+        # Read back and check counts
+        scndreader = nix.File.open(secondwrite, mode=nix.FileMode.ReadOnly)
+        self.compare_blocks([blk], scndreader.blocks)
+        checksignalcounts(secondwrite)
 
     def test_to_value(self):
         section = self.io.nix_file.create_section("Metadata value test",
@@ -1017,9 +1255,9 @@ class NixIOWriteTest(NixIOTest):
         writeprop(section, "val", val)
         self.assertEqual(val, section["val"])
 
-        # empty string
+        # empty string (gets stored as empty list)
         writeprop(section, "emptystring", "")
-        self.assertEqual("", section["emptystring"])
+        self.assertEqual(list(), section["emptystring"])
 
     def test_annotations_special_cases(self):
         # Special cases for annotations: empty list, list of strings,
@@ -1095,6 +1333,8 @@ class NixIOReadTest(NixIOTest):
         for idx, nixblock in enumerate(self.nixfile.blocks):
             neoblock = self.io.read_block(index=idx)
             self.assertEqual(neoblock.annotations["nix_name"], nixblock.name)
+            self.assertEqual(neoblock.annotations["nix_name"],
+                             self.nixfile.blocks[idx].name)
 
     def test_auto_index_read(self):
         for nixblock in self.nixfile.blocks:
@@ -1105,6 +1345,15 @@ class NixIOReadTest(NixIOTest):
         self.assertIs(self.io.read_block(), None)
         self.assertIs(self.io.read_block(), None)
         self.assertIs(self.io.read_block(), None)
+
+        with NixIO(self.filename, "ro") as nf:
+            neoblock = nf.read_block(index=1)
+            self.assertEqual(self.nixfile.blocks[1].name,
+                             neoblock.annotations["nix_name"])
+
+            neoblock = nf.read_block()  # should start again from 0
+            self.assertEqual(self.nixfile.blocks[0].name,
+                             neoblock.annotations["nix_name"])
 
     def test_neo_name_read(self):
         for nixblock in self.nixfile.blocks:
@@ -1127,22 +1376,19 @@ class NixIOContextTests(NixIOTest):
         with NixIO(self.filename, "ow") as iofile:
             iofile.write_block(neoblock)
 
-        nixfile = nix.File.open(self.filename, nix.FileMode.ReadOnly,
-                                backend="h5py")
+        nixfile = nix.File.open(self.filename, nix.FileMode.ReadOnly)
         self.compare_blocks([neoblock], nixfile.blocks)
         nixfile.close()
 
         neoblock.annotate(**self.rdict(5))
         with NixIO(self.filename, "rw") as iofile:
             iofile.write_block(neoblock)
-        nixfile = nix.File.open(self.filename, nix.FileMode.ReadOnly,
-                                backend="h5py")
+        nixfile = nix.File.open(self.filename, nix.FileMode.ReadOnly)
         self.compare_blocks([neoblock], nixfile.blocks)
         nixfile.close()
 
     def test_context_read(self):
-        nixfile = nix.File.open(self.filename, nix.FileMode.Overwrite,
-                                backend="h5py")
+        nixfile = nix.File.open(self.filename, nix.FileMode.Overwrite)
         name_one = self.rword()
         name_two = self.rword()
         nixfile.create_block(name_one, "neo.block")
